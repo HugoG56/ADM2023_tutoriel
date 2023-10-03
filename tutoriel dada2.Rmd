@@ -56,11 +56,6 @@ if (!file.exists(silva_species_assignment)) {
 Zenodo est un dépôt de fichier
 
 ```{r}
-devtools::load_all()
-```
-Installer toutes les fonctions de R, comme si c'était des packages
-
-```{r}
 path_to_fastqs <- here::here("data", "raw")
 ```
 
@@ -129,6 +124,7 @@ qualityprofile(fnFs,
                fnRs,
                file.path(quality_folder, "quality_plots.pdf"))
 ```
+
 ```{r}
 path_to_trimmed_reads <- here::here(
   "outputs",
@@ -163,6 +159,14 @@ Biostrings::readDNAStringSet(
   nrec = 10
 )
 ```
+Ne montre que les 10 premières séquences ADN du fichier forward du 1er échantillon
+fnRs[1] = montre le 1er élément de fnRS
+On voit que les 10 premières lignes commencent toutes par la même séquence
+
+```{bash, eval=FALSE}
+pwd
+cp -R /home/rstudio/ADM2023_tutoriel/course-material-main/bash .
+```
 
 ```{r}
 (primer_log <- primer_trim(
@@ -174,6 +178,198 @@ Biostrings::readDNAStringSet(
   min_size = 200
 ))
 ```
+On utilise la fonction primer_trim qui fait appel au logiciel cutadapt, on donne les fnFs et fnRs, il faut que les séquences fassent minimum 200 nucléotides
+Une fois les adpatauets et ammorces Illumina enlevés, quelques séquences ont été enlevées
 
+```{r}
+nopFw <- sort(list.files(path_to_trimmed_reads, pattern = "R1", full.names = TRUE))
+nopRv <- sort(list.files(path_to_trimmed_reads, pattern = "R2", full.names = TRUE))
+print(nopFw)
+print(nopRv)
+```
+Met le nom des fichiers une fois que les reads ont été trimés 
 
+```{r}
+path_to_filtered_reads <- here::here("outputs", "dada2", "filtered")
+if (!dir.exists(path_to_filtered_reads)) dir.create(path_to_filtered_reads, recursive = TRUE)
+```
 
+```{r}
+filtFs <- file.path(path_to_filtered_reads, basename(fnFs))
+filtRs <- file.path(path_to_filtered_reads, basename(fnRs))
+print(filtFs)
+print(filtRs)
+```
+
+```{r}
+names(filtFs) <- sample_names
+names(filtRs) <- sample_names
+```
+
+```{r}
+(out <- dada2::filterAndTrim(
+  fwd = nopFw,
+  filt = filtFs,
+  rev = nopRv,
+  filt.rev = filtRs,
+  minLen = 150,
+  matchIDs = TRUE,
+  maxN = 0,
+  maxEE = c(3, 3),
+  truncQ = 2
+))
+```
+R1 et R2 doivent avoir la même identité (matchIDs)
+maxN=0 veut dire qu'il doit y avoir 0 ambiguité (N veut dire qu'on sait pas si c'est un A,T,C ou G)
+Read de mauvaise qualité quand il y a des N
+truncQ veut dire que c'est la moyenne d'un score de qualité sur une fenêtre de 20
+
+```{r}
+errF <- dada2::learnErrors(filtFs,
+                           randomize = TRUE,
+                           multithread = TRUE)
+```
+```{r}
+errR <- dada2::learnErrors(filtRs,
+                           randomize = TRUE,
+                           multithread = TRUE)
+```
+
+```{r}
+dada2::plotErrors(errF, nominalQ=TRUE)
+```
+```{r}
+derepFs <- dada2::derepFastq(filtFs, verbose = TRUE)
+
+derepRs <- dada2::derepFastq(filtRs, verbose = TRUE)
+```
+
+```{r}
+dadaFs <- dada2::dada(derepFs, err = errF, multithread = TRUE)
+```
+
+```{r}
+dadaRs <- dada2::dada(derepRs, err = errR, multithread = TRUE)
+```
+
+```{r}
+mergers <- dada2::mergePairs(
+  dadaF = dadaFs,
+  derepF = derepFs,
+  dadaR = dadaRs,
+  derepR = derepRs,
+  maxMismatch = 0,
+  verbose = TRUE
+)
+```
+mergers => Assemblage de R1 et R2, ils ne sont plus séparés 
+```{r}
+seqtab <- dada2::makeSequenceTable(mergers)
+```
+makeSequenceTable => cette séquence on la trouve dans de fois dans tel échantillon...
+```{r}
+seqtab_nochim <- dada2::removeBimeraDenovo(seqtab,
+                                           method = "consensus",
+                                           multithread = TRUE,
+                                           verbose = TRUE)
+```
+```{r}
+taxonomy <- dada2::assignTaxonomy(
+  seqs = seqtab_nochim,
+  refFasta = silva_train_set,
+  taxLevels = c("Kingdom", "Phylum", "Class",
+                "Order", "Family", "Genus",
+                "Species"),
+  multithread = TRUE,
+  minBoot = 60
+)
+```
+
+```{r}
+taxonomy <- dada2::addSpecies(
+  taxonomy,
+  silva_species_assignment,
+  allowMultiple = FALSE
+)
+```
+
+```{r}
+export_folder <- here::here("outputs", "dada2", "asv_table")
+
+if (!dir.exists(export_folder)) dir.create(export_folder, recursive = TRUE)
+
+saveRDS(object = seqtab_nochim,
+        file = file.path(export_folder, "seqtab_nochim.rds"))
+
+saveRDS(object = taxonomy,
+        file = file.path(export_folder, "taxonomy.rds"))
+```
+
+```{r}
+asv_seq <- colnames(seqtab_nochim)
+```
+
+```{r}
+ndigits <- nchar(length(asv_seq))
+asv_id <- sprintf(paste0("ASV_%0", ndigits, "d"), seq_along(asv_seq))
+```
+
+```{r}
+row.names(taxonomy) <- colnames(seqtab_nochim) <- names(asv_seq) <- asv_id
+```
+
+```{r}
+taxonomy_export <- df_export(taxonomy, new_rn = "asv")
+
+seqtab_nochim_export <- t(seqtab_nochim)
+seqtab_nochim_export <- df_export(seqtab_nochim_export, new_rn = "asv")
+```
+
+```{r}
+write.table(taxonomy_export,
+            file = file.path(export_folder, "taxonomy.tsv"),
+            quote = FALSE,
+            sep = "\t",
+            row.names = FALSE)
+```
+
+```{r}
+write.table(seqtab_nochim_export,
+            file = file.path(export_folder, "asv_table.tsv"),
+            quote = FALSE,
+            sep = "\t",
+            row.names = FALSE)
+```
+
+```{r}
+cat(paste0(">", names(asv_seq), "\n", asv_seq),
+    sep = "\n",
+    file = file.path(export_folder, "asv.fasta"))
+```
+
+```{r}
+getN <- function(x) sum(dada2::getUniques(x))
+
+log_table <- data.frame(
+  input = primer_log$in_reads,
+  with_fwd_primer = primer_log$`w/adapters`,
+  with_rev_primer = primer_log$`w/adapters2` ,
+  with_both_primers = out[, 1],
+  filtered = out[, 2],
+  denoisedF = sapply(dadaFs, getN),
+  denoisedR = sapply(dadaRs, getN),
+  merged = sapply(mergers, getN),
+  nonchim = rowSums(seqtab_nochim),
+  perc_retained = rowSums(seqtab_nochim) / out[, 1] * 100
+)
+
+rownames(log_table) <- sample_names
+```
+
+```{r}
+df_export(log_table, new_rn = "sample") |>
+  write.table(file = file.path(export_folder, "log_table.tsv"),
+              quote = FALSE,
+              sep = "\t",
+              row.names = FALSE)
+```
