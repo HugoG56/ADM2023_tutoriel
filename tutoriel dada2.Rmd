@@ -2,12 +2,10 @@
 title: "R Notebook"
 output: github_document
 ---
-
 ```{bash, eval=FALSE}
 wget https://github.com/ANF-MetaBioDiv/course-material/archive/refs/heads/main.zip
 unzip main.zip
 ```
-
 here : endroit de référence du tutoriel
 ```{r}
 refdb_folder <- here::here("data", "refdb")
@@ -54,7 +52,6 @@ if (!file.exists(silva_species_assignment)) {
 }
 ```
 Zenodo est un dépôt de fichier
-
 ```{r}
 path_to_fastqs <- here::here("data", "raw")
 ```
