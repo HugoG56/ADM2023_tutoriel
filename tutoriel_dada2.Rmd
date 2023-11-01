@@ -1,0 +1,435 @@
+---
+title: "R Notebook"
+output: github_document
+---
+On télécharge le référentiel de cours dans un premier temps:
+```{bash, eval=FALSE}
+wget https://github.com/ANF-MetaBioDiv/course-material/archive/refs/heads/main.zip
+unzip main.zip
+```
+
+```{r}
+# On enregistre le chemin d'accès au dossier:
+refdb_folder <- here::here("data", "refdb")
+refdb_folder
+```
+here::here() veut dire "dans le package here, cherche la fonction here"
+```{r}
+# On créé le nouveau dossier (seulement s'il n'existe pas déjà, d'où la commande "if"): 
+if (!dir.exists(refdb_folder)) dir.create(refdb_folder, recursive = TRUE)
+```
+Si refdb existe pas créer de dossier, sinon oui
+
+```{bash, eval=FALSE}
+cp -R course-material-main/data/raw ./data/
+```
+
+```{r, eval=FALSE}
+# On définit le temps après lequel R arrête d'éxécuter les programmes: 
+getOption("timeout")
+# Par défaut, ce temps est de 60 secondes
+# Pour le changer, il suffit d'éxécuter la commande, avec par exemple : options(timeout = 1200)
+options(timeout = 1200)
+# Le temps serait alors défini sur 1200 secondes, soit 20 minutes
+```
+```{r}
+# On définit une nouvelle variable qui reçoit le chemin dans fdb folder
+silva_train_set <- file.path(refdb_folder,
+                             "silva_nr99_v138.1_train_set.fa.gz")
+
+silva_species_assignment <- file.path(refdb_folder,
+                                      "silva_species_assignment_v138.1.fa.gz")
+```
+
+```{r}
+# De la même manière, on télécharge les dossiers s'ils n'existent pas déjà:
+if (!file.exists(silva_train_set)) {
+  download.file(
+    "https://zenodo.org/record/4587955/files/silva_nr99_v138.1_train_set.fa.gz",
+    silva_train_set,
+    quiet = TRUE
+  )
+}
+
+if (!file.exists(silva_species_assignment)) {
+  download.file(
+    "https://zenodo.org/record/4587955/files/silva_species_assignment_v138.1.fa.gz",
+    silva_species_assignment,
+    quiet = TRUE
+  )
+}
+```
+Zenodo est un dépôt de fichier
+```{r}
+# On enregistre le chemin d'accès au répertoire dans une variable, qui contient les données fastq (donc les données brutes issues du séquençage):
+path_to_fastqs <- here::here("data", "raw")
+```
+
+```{r}
+fnFs <- sort(list.files(path_to_fastqs,
+                        pattern = "_R1.fastq.gz",
+                        full.names = TRUE))
+print(fnFs)
+# list.files permet de lister les fichiers présents
+# "pattern" permet de sélectionner les noms de fichiers se terminant par une expression (ici on a sélectionné les noms de fichiers se terminant par _R1.fastq.gz)
+
+fnRs <- sort(list.files(path_to_fastqs,
+                        pattern = "_R2.fastq.gz",
+                        full.names = TRUE))
+print(fnRs)
+# Ici on a sélectionné les noms de fichiers se terminant par _R2.fastq.gz
+```
+
+fnFs = liste des fichiers qu'il y a dans la variable et qui contient le patterne f1.fastq (liste des chemins qui mènent aux fichiers)
+
+```{r}
+sample_names <- basename(fnFs) |>
+  strsplit(split = "_") |>
+  sapply(head, 1)
+print(sample_names)
+# basename() permet de ne conserver que le nom du fichier, en supprimant le chemin d'accès
+# l> permet d'enchaîner des fonctions, en évitant les variables intermédiaires et les parenthèses imbriquées
+# strsplit() permet de diviser une chaine de caractères selon le modèle utilisé (ici "_")
+# sapply() permet d'appliquer une fonction à chaque élément de la liste ou du vecteur
+```
+
+Sample_names reçoit le nom de base pour chaque fnFs (basename = nom du fichier sans toute l'arborescence)
+
+Strsplit = fonction de déoupage de caractère, avec comme séparateur le trait du bas (_)
+Donne une liste avec 2 composants dans cette liste : 1er élément = S11B 2ème élément = R1.fastq
+
+sapply = s'apllique dans chacun des éléments de la liste, head1 veut dire qu'on prend juste le 1er élément (S11B, S1B...)
+
+```{r}
+basename(fnFs) |>
+  head()
+# On obtient des noms de fichiers comme par exemple "S11B_R1.fastq.gz"
+```
+
+```{r}
+# On utilise donc la fonction strsplit() pour diviser le nom de fichier en un vecteur à 2 éléments, en divisant au niveau du "_":
+basename(fnFs) |>
+  strsplit(split = "_") |>
+  head()
+# On obtient bien d'un côté "S11B" et de l'autre "R1.fastq.gz", le "_" ayant disparu
+```
+
+```{r}
+# Pour cela, on utilise la fonction sapply() qui va nous permettre de garder que le premier élément, par exemple "S11B"
+basename(fnFs) |>
+  strsplit(split = "_") |>
+  sapply(head, 1) |>
+  head()
+```
+```{r}
+# On peut obtenir le même résultat, en utilisant des expressions régulières:
+gsub("^.+/|_.+$", "", fnFs) |> head()
+```
+
+```{r}
+# On télécharge toutes les fonctions se trouvant dans R, en utilisant le chemin:
+devtools::load_all(path ="/home/rstudio/ADM2023_tutoriel/course-material-main/R")
+```
+```{r}
+# On créé un répertoire pour les résultats (="outputs"):
+quality_folder <- here::here("outputs",
+                             "dada2",
+                             "quality_plots")
+
+if (!dir.exists(quality_folder)) {
+  dir.create(quality_folder, recursive = TRUE)
+}
+
+# On utilise la fonction qualityprofile() pour vérifier la qualité des séquences brutes:
+qualityprofile(fnFs,
+               fnRs,
+               file.path(quality_folder, "quality_plots.pdf"))
+# Ceci génère un fichier au format PDF, comportant l'ensemble des plots, c'est-à-dire des graphiques représentant la qualité des séquences brutes
+```
+
+```{r}
+# On créé un dossier pour enregistrer les lectures une fois qu'elles sont coupées (trimmed reads): 
+path_to_trimmed_reads <- here::here(
+  "outputs",
+  "dada2",
+  "trimmed"
+)
+
+if (!dir.exists(path_to_trimmed_reads)) dir.create(path_to_trimmed_reads, recursive = TRUE)
+```
+
+Dans mon camp de base, mets moi un dossier "outputs", dedans mets moi un dossier "dada2", dans dada2 mets moi un dossier "trimmed"
+
+```{r}
+# On enregistre les amorces primer (fwd) et inverse (rev) respectivement dans des variables :
+primer_fwd  <- "CCTACGGGNBGCASCAG"
+primer_rev  <- "GACTACNVGGGTATCTAAT"
+print(primer_fwd)
+print(primer_rev)
+```
+
+```{r}
+# On regarde les séquences des R1:
+Biostrings::readDNAStringSet(
+  fnFs[1],
+  format = "fastq",
+  nrec = 10
+)
+```
+
+```{r}
+# Même chose pour les R2:
+Biostrings::readDNAStringSet(
+  fnRs[1],
+  format = "fastq",
+  nrec = 10
+)
+```
+Ne montre que les 10 premières séquences ADN du fichier forward du 1er échantillon
+fnRs[1] = montre le 1er élément de fnRS
+On voit que les 10 premières lignes commencent toutes par la même séquence
+
+```{bash, eval=FALSE}
+pwd
+cp -R /home/rstudio/ADM2023_tutoriel/course-material-main/bash .
+```
+
+```{r}
+# On utilise alors la fonction primer_trim() pour supprimer les amorces:
+(primer_log <- primer_trim(
+  forward_files = fnFs,
+  reverse_files = fnRs,
+  primer_fwd = primer_fwd,
+  primer_rev = primer_rev,
+  output_dir = path_to_trimmed_reads,
+  min_size = 200
+))
+```
+On utilise la fonction primer_trim qui fait appel au logiciel cutadapt, on donne les fnFs et fnRs, il faut que les séquences fassent minimum 200 nucléotides
+Une fois les adpatauets et ammorces Illumina enlevés, quelques séquences ont été enlevées
+
+```{r}
+nopFw <- sort(list.files(path_to_trimmed_reads, pattern = "R1", full.names = TRUE))
+nopRv <- sort(list.files(path_to_trimmed_reads, pattern = "R2", full.names = TRUE))
+print(nopFw)
+print(nopRv)
+```
+Met le nom des fichiers une fois que les reads ont été trimés 
+
+```{r}
+# De nouveau, on créé un dossier, s'il n'existe pas déjà:
+path_to_filtered_reads <- here::here("outputs", "dada2", "filtered")
+if (!dir.exists(path_to_filtered_reads)) dir.create(path_to_filtered_reads, recursive = TRUE)
+```
+
+```{r}
+# On fait de même pour lister les chemins:
+filtFs <- file.path(path_to_filtered_reads, basename(fnFs))
+filtRs <- file.path(path_to_filtered_reads, basename(fnRs))
+print(filtFs)
+print(filtRs)
+```
+
+```{r}
+# On établit ensuite un lien entre les fichiers et les noms d'échantillons:
+names(filtFs) <- sample_names
+names(filtRs) <- sample_names
+```
+
+```{r}
+# On utilise la fonction filterAndTrim() pour pouvoir filtrer et découper un fichier d'entrée fastq, sur la base de plusieurs critères définissables (fwd, filt, maxN...), et ce afin de produire un nouveau fichier fastq contenant les lectures découpées ayant passé le ou les filtres: 
+(out <- dada2::filterAndTrim(
+  fwd = nopFw,
+  filt = filtFs,
+  rev = nopRv,
+  filt.rev = filtRs,
+  minLen = 150,
+  matchIDs = TRUE,
+  maxN = 0,
+  maxEE = c(3, 3),
+  truncQ = 2
+))
+# fwd prend le chemin d'accès au fichier fastq, ou le répertoire le contenant
+# filt prend le chemin conduisant vers le fichier de sortie fastq filtré (correspondant au filtrage du fichier d'entrée fastq fwd)
+# rev prend le chemin vers le fichier fastq inversé, à partir des données de séquences paires correspondant à celle fournit pour fwd
+# filt.rev prend le chemin vers le fichier de sortie filtré fastq (correspondant au fichier d'entrée rev)
+# minLen supprime les lectures dont la longueur est inférieure à minLen (ici 150)
+# matchIDs filtre uniquement par paires (permet de faire correspondre les fichiers avant et après filtrage). Si TRUE, seules les lectures possédant des similarités sont produites. Si FALSE, pas de vérification
+# maxN élimine les séquences contenant des N (dada2 n'autorise pas les N, donc on met maxN = 0), donc cela correspond au nombre de bases ambigües acceptées
+# maxEE permet d'éliminer les lectures dont le nombres "d'érreurs attendues" est supérieur à maxEE
+# truncQ permet de tronquer les lectures à la première occurence d'un score de qualité inférieur ou égal à truncQ
+```
+R1 et R2 doivent avoir la même identité (matchIDs)
+maxN=0 veut dire qu'il doit y avoir 0 ambiguité (N veut dire qu'on sait pas si c'est un A,T,C ou G)
+Read de mauvaise qualité quand il y a des N
+truncQ veut dire que c'est la moyenne d'un score de qualité sur une fenêtre de 20
+
+```{r}
+# Il faut utiliser un modèle d'erreur, pour savoir à quelle vitesse un nucléotide est remplacé par un autre pour un score de qualité donné. Pour cela, on utilise la fonction learnErrors():
+errF <- dada2::learnErrors(filtFs,
+                           randomize = TRUE,
+                           multithread = TRUE)
+```
+```{r}
+errR <- dada2::learnErrors(filtRs,
+                           randomize = TRUE,
+                           multithread = TRUE)
+```
+
+```{r}
+# On souhaite modéliser graphiquement le modèle d'erreur:
+dada2::plotErrors(errF, nominalQ=TRUE)
+```
+```{r}
+# Pour chaque séquence unique, on souhaite compter le nombre de lectures. Cette déréplication est permise grâce à la fonction dada2::derepFastq():
+derepFs <- dada2::derepFastq(filtFs, verbose = TRUE)
+
+derepRs <- dada2::derepFastq(filtRs, verbose = TRUE)
+```
+
+```{r}
+# Maintenant, il est possible d'éxécuter dada2, en utilisant le modèle d'erreur (errF) et les séquences dérépliquées (derepFs):
+dadaFs <- dada2::dada(derepFs, err = errF, multithread = TRUE)
+```
+
+```{r}
+dadaRs <- dada2::dada(derepRs, err = errR, multithread = TRUE)
+```
+
+```{r}
+# Ensuite, les lectures peuvent être fusionnées, avec la fonction dada2::mergePairs():
+mergers <- dada2::mergePairs(
+  dadaF = dadaFs,
+  derepF = derepFs,
+  dadaR = dadaRs,
+  derepR = derepRs,
+  maxMismatch = 0,
+  verbose = TRUE
+)
+```
+mergers => Assemblage de R1 et R2, ils ne sont plus séparés 
+```{r}
+# On construit une table, connaissant le nombre de lectures dans chaque échantillon:
+seqtab <- dada2::makeSequenceTable(mergers)
+```
+makeSequenceTable => cette séquence on la trouve tant de fois dans tel échantillon...
+```{r}
+# Il s'agit de supprimer les bimères (chimères à deux parents, sachant que les chimères sont des séquences d'artefacts formées par deux ou plusieurs séquences biologiques mal formées), et ce grâce à la fonction dada2::removeBimeraDenovo():
+seqtab_nochim <- dada2::removeBimeraDenovo(seqtab,
+                                           method = "consensus",
+                                           multithread = TRUE,
+                                           verbose = TRUE)
+```
+```{r}
+# La table est prête, mais il s'agit grâce à la fonction dada2:assignTaxonomy() de connaitre l'identité taxonomique en comparant les séquences à des bases de données de référence, telles que SILVA:
+taxonomy <- dada2::assignTaxonomy(
+  seqs = seqtab_nochim,
+  refFasta = silva_train_set,
+  taxLevels = c("Kingdom", "Phylum", "Class",
+                "Order", "Family", "Genus",
+                "Species"),
+  multithread = TRUE,
+  minBoot = 60
+)
+```
+
+```{r}
+# Cette méthode ne parvient pas tout le temps à attribuer au niveau de l'espèce. On peut alors utiliser la séquence dada2::addSpecies(), si on considère qu'on appartient à la même espèce quand on a 100% de similarité à une séquence de référence
+taxonomy <- dada2::addSpecies(
+  taxonomy,
+  silva_species_assignment,
+  allowMultiple = FALSE
+)
+```
+
+```{r}
+# Les résultats sont prêts, il s'agit de les préparer pour pouvoir les exporter:
+export_folder <- here::here("outputs", "dada2", "asv_table")
+
+if (!dir.exists(export_folder)) dir.create(export_folder, recursive = TRUE)
+
+saveRDS(object = seqtab_nochim,
+        file = file.path(export_folder, "seqtab_nochim.rds"))
+
+saveRDS(object = taxonomy,
+        file = file.path(export_folder, "taxonomy.rds"))
+```
+
+```{r}
+# On créé une nouvelle variable pour collecter les séquences:
+asv_seq <- colnames(seqtab_nochim)
+```
+
+```{r}
+# Puis on les "sépare":
+ndigits <- nchar(length(asv_seq))
+asv_id <- sprintf(paste0("ASV_%0", ndigits, "d"), seq_along(asv_seq))
+```
+
+```{r}
+# On renomme les différentes variables:
+row.names(taxonomy) <- colnames(seqtab_nochim) <- names(asv_seq) <- asv_id
+```
+
+```{r}
+# Avant de pouvoir exporter les données, on convertit les noms de lignes en une nouvelle colonne grâce à la fonction df_export():
+taxonomy_export <- df_export(taxonomy, new_rn = "asv")
+
+seqtab_nochim_export <- t(seqtab_nochim)
+seqtab_nochim_export <- df_export(seqtab_nochim_export, new_rn = "asv")
+```
+
+```{r}
+# On exporte la taxonomie:
+write.table(taxonomy_export,
+            file = file.path(export_folder, "taxonomy.tsv"),
+            quote = FALSE,
+            sep = "\t",
+            row.names = FALSE)
+```
+
+```{r}
+# On exporte la table:
+write.table(seqtab_nochim_export,
+            file = file.path(export_folder, "asv_table.tsv"),
+            quote = FALSE,
+            sep = "\t",
+            row.names = FALSE)
+```
+
+```{r}
+# Enfin, on exporte les séquences fasta:
+cat(paste0(">", names(asv_seq), "\n", asv_seq),
+    sep = "\n",
+    file = file.path(export_folder, "asv.fasta"))
+```
+
+```{r}
+# On peut également exporter les statistiques sur chaque étape de prétaitement, d'abord en les assemblant:
+getN <- function(x) sum(dada2::getUniques(x))
+
+log_table <- data.frame(
+  input = primer_log$in_reads,
+  with_fwd_primer = primer_log$`w/adapters`,
+  with_rev_primer = primer_log$`w/adapters2` ,
+  with_both_primers = out[, 1],
+  filtered = out[, 2],
+  denoisedF = sapply(dadaFs, getN),
+  denoisedR = sapply(dadaRs, getN),
+  merged = sapply(mergers, getN),
+  nonchim = rowSums(seqtab_nochim),
+  perc_retained = rowSums(seqtab_nochim) / out[, 1] * 100
+)
+
+rownames(log_table) <- sample_names
+```
+
+```{r}
+# Puis en les exportant:
+df_export(log_table, new_rn = "sample") |>
+  write.table(file = file.path(export_folder, "log_table.tsv"),
+              quote = FALSE,
+              sep = "\t",
+              row.names = FALSE)
+```
+
