@@ -2,6 +2,7 @@ R Notebook
 ================
 
 ``` r
+# On charge certaines bibliothèques, qui seront utilisées dans ce tutoriel (ainsi que les packages se trouvant dans R):
 library(phyloseq)
 library(ggplot2)
 library(dplyr)
@@ -25,6 +26,7 @@ devtools::load_all(path ="/home/rstudio/ADM2023_tutoriel/course-material-main/R"
     ## ℹ Loading ANF_metaB
 
 ``` r
+# On cherche la fonction here() dans le package here, puis on enregistre le chemin, s'il n'existe pas déjà:
 output_beta <- here::here("outputs", "beta_diversity")
 if (!dir.exists(output_beta)) dir.create(output_beta, recursive = TRUE)
 ```
@@ -34,12 +36,16 @@ cp -R course-material-main/data/asv_table ./data/
 ```
 
 ``` r
+# On charge les données, puis on inspecte le phyloseq_object:
 physeq <- readRDS(here::here("data",
                              "asv_table",
                              "phyloseq_object_alpha_beta_div.rds"))
 ```
 
+Il s’agit par la suite de réaliser une normalisation
+
 ``` r
+# On fait un sous-échantillonnage des lectures de chaque échantillon, d'abord on regarde combien de lectures nous avons par échantillon:
 rowSums(physeq@otu_table@.Data)
 ```
 
@@ -49,6 +55,7 @@ rowSums(physeq@otu_table@.Data)
     ##  888  991
 
 ``` r
+# On enregistre ces résultats, puis on examine le classement des lectures:
 readsumsdf <- data.frame(nreads = sort(taxa_sums(physeq), decreasing = TRUE),
                         sorted = 1:ntaxa(physeq),
                         type = "OTUs")
@@ -71,6 +78,7 @@ head(readsumsdf)
     ## ASV6    654      6 OTUs
 
 ``` r
+# SOus forme de représentation graphique:
 ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
   geom_bar(stat = "identity") +
   ggtitle("Total number of reads") +
@@ -79,13 +87,23 @@ ggplot(readsumsdf, aes(x = sorted, y = nreads)) +
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+Il faut donc transformer en une somme d’échantillons égale (puisque le
+nombre de lectures n’est pas le même entre les échantillons) pour que
+l’effort d’échantillonnage soit le même entre les différents
+échantillons
 
 ``` r
+# On définit la "graine" pour l'échantillonnage aléatoire, permettant la reproductibilité:
 set.seed(10000)
+# On définit le nombre minimum de lectures dans un échantillon:
 min(rowSums(physeq@otu_table@.Data))
 ```
 
     ## [1] 837
+
+Le résultat montre que le nombre minimum de lectures dans un échantillon
+est de 837. On choisi donc 800 lectures par échantillon pour que ce soit
+équitable et comparable
 
 ``` r
 physeq_rar <- rarefy_even_depth(physeq, sample.size = 800)
@@ -133,15 +151,23 @@ physeq_rar
     ## phy_tree()    Phylogenetic Tree: [ 208 tips and 207 internal nodes ]
     ## refseq()      DNAStringSet:      [ 208 reference sequences ]
 
+IL s’agit de réaliser la transformation du rapport de journalisation
+centré CLR (puisque le total de lectures est limité par la profondeur de
+séquençage, ni l’abondance absolue si l’abondance relative d’un taxon ne
+sont informatives de l’abondance réelle du taxon dans l’environnement)
+
 ``` r
+# On remplace d'abord les zéros en utilisant l'approche multiplicative du compte zéro:
 tmp <- zCompositions::cmultRepl(physeq@otu_table,
                                 method = "CZM",
                                 label = 0,
                                 z.warning = 1)
+# On génère le log-zéro centré transformé (cependant les ASV sont en lignes)
 physeq_clr_asv <- apply(tmp, 1, function(x) log(x) - mean(log(x)))
 ```
 
 ``` r
+# On créé un nouvel objet phyloseq avec les comptages transformés CLR:
 physeq_clr <- physeq
 otu_table(physeq_clr) <- otu_table(t(physeq_clr_asv),
                                    taxa_are_rows = FALSE)
@@ -161,14 +187,21 @@ data.frame(physeq_clr@otu_table@.Data[1:5, 1:10])
     ## S2S   4.6847617  4.2367369 -0.6558837
     ## S3B  -0.6954498 -0.6954498  4.4057470
 
-``` r
-physeq_phylum <- physeq_rar %>%
-  tax_glom(taxrank = "Family") %>%                     
-  transform_sample_counts(function(x) {x/sum(x)} ) %>% 
-  psmelt() %>%                                         
-  filter(Abundance > 0.02) %>%                         
-  arrange(Family)                                      
+Les valeurs obtenues ne sont plus des comptages mais plutôt la dominance
+(ou l’absence de celle-ci) pour chaque taxon par rapport à la moyenne
+géométrique de tous les taxons sur l’échelle logarithmique. Cette table
+transformée en rapport logique centré (CLR) peut être utilisée
+directement dans un PCA ou un RDA pour générer une ordination de bêta
+diversité en utilisant la distance d’Aitchison.
 
+``` r
+# On souhaite visualiser l'abondance relative des organismes à des rangs taxonomiques spécifiques:
+physeq_phylum <- physeq_rar %>% 
+  tax_glom(taxrank = "Family") %>%                  # agglomérer au niveau de la Famille
+  transform_sample_counts(function(x) {x/sum(x)} ) %>% # transformer en abondance relative
+  psmelt() %>%                     # Fusionner pour un format plus long                 
+  filter(Abundance > 0.02) %>%     # Filtrer les taxons peu abondants     
+  arrange(Family)                  # Trier les données par ordre alphabétique de phylum             
 head(physeq_phylum)
 ```
 
@@ -201,19 +234,25 @@ head(physeq_phylum)
     ## 5 Rhodospirillales AEGEAN-169 marine group
     ## 6 Rhodospirillales AEGEAN-169 marine group
 
+Il s’agit par lasuite d’utiliser une carte arborescente, afin de
+détecter approximativement si certains taxons ne doivent pas être
+présents (contaminants) et d’observer si les taxons dominants
+correspondent à l’habitat étudié.
+
 ``` r
 treemap::treemap(physeq_phylum, index=c("Class", "Family"), vSize="Abundance", type="index",
-        fontsize.labels=c(15,12),                
-        fontcolor.labels=c("white","black"),    
-        fontface.labels=c(2,1),                  
+        fontsize.labels=c(15,12),             # Taille des étiquettes   
+        fontcolor.labels=c("white","black"),  # Couleur des étiquettes
+        fontface.labels=c(2,1),               # Police (de caractères) des étiquettes
         align.labels=list(
           c("center", "center"), 
-          c("left", "bottom")),                 
-        overlap.labels=0.5,                      
-        inflate.labels=F, 
-        border.col=c("black","white"),          
+          c("left", "bottom")),               # Permet de situer les étiquettes sur le graphique (qui est un rectante)  
+        overlap.labels=0.5,                   # Nombre entre 0 et 1 qui détermine la tolérance de chevauchement entre les étiquettes. 0 signifie que les étiquettes de niveau inférieur ne sont pas imprimées si les étiquettes de niveau supérieur se chevauchent, 1 signifie que les étiquettes sont toujours imprimées. Les valeurs intermédiaires, par exemple la valeur par défaut 0,5, signifient que les étiquettes de niveau inférieur sont imprimées si les autres étiquettes ne se chevauchent pas plus de 0,5 fois la taille de leur zone
+
+        inflate.labels=F,                     # Si VRAI, les étiquettes sont plus grandes lorsque le rectange est plus grand
+        border.col=c("black","white"),        # Couleur des bordures séparant les niveaux taxonomiques  
         border.lwds=c(4,2),
-        #palette = "Set3",                        
+        #palette = "Set3",                    # Sélectionner la palette de couleurs  
         fontsize.title=12
 )
 ```
@@ -263,12 +302,16 @@ ggsave(here::here(output_beta,"treemap_treemapify.pdf"))
 
     ## Saving 7 x 5 in image
 
+Ici, nous pouvons observer que la méta-communauté est dominée par des
+clades marins typiques tels que le groupe marin AEGEAN dans les
+alphaprotéobactéries ou le clade SAR86 dans les gammaprotéobactéries.
+
 ``` r
 ggplot(physeq_phylum, aes(x = Sample, y = Abundance, fill = Family)) + 
   geom_bar(stat = "identity") +
   # facet_wrap(~Treatment, nrow=1, scales = "free_x") +
   ylab("Relative Abundance (Family > 2%)") +
-  scale_y_continuous(expand = c(0,0)) + 
+  scale_y_continuous(expand = c(0,0)) +                 # supprimer l'espace sous le 0 de l'axe des y dans le graphique
   ggtitle("Community composition") +
   theme_bw() +
   theme(axis.title.x = element_blank(),
@@ -276,8 +319,8 @@ ggplot(physeq_phylum, aes(x = Sample, y = Abundance, fill = Family)) +
                                    hjust = 0.5, vjust = 0.8),
         axis.ticks.x = element_blank(),
         panel.background = element_blank(), 
-        panel.grid.major = element_blank(),  
-        panel.grid.minor = element_blank())  
+        panel.grid.major = element_blank(),            # étiquettes des grilles principales
+        panel.grid.minor = element_blank())            # étiquettes des grilles mineures
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
@@ -288,10 +331,17 @@ ggsave(here::here(output_beta, "asv_composition.pdf"))
 
     ## Saving 7 x 5 in image
 
+Il est possible de voir ici quelques différences dans la composition au
+niveau de la famille, avec un enrichissement en Pseudoalteromonadaceae
+dans certains échantillons et Cyanobiaceae également. Cependant, il est
+difficile de discerner beaucoup de couleurs dans ce type de graphique.
+
 ``` r
+# On calcule la matrice de dissimilarité à l'aide de l'indice de Jaccard:
 physeq_rar_jaccard <- phyloseq::distance(physeq_rar,
                                          method = "jaccard",
                                          binary = TRUE)
+# Ceci permet d'éviter d'avoir des valeurs négatives
 physeq_rar_jaccard <- sqrt(physeq_rar_jaccard)
 ```
 
@@ -309,21 +359,30 @@ phy_tree(physeq_rar) <- phangorn::midpoint(physeq_rar@phy_tree)
 unifracs <- GUniFrac::GUniFrac(physeq_rar@otu_table@.Data, physeq_rar@phy_tree, alpha=c(0, 0.5, 1))$unifracs
 ```
 
+L’objet unifracs est une liste contenant 5 matrices de distance
+correspondant à l’UniFrac pondéré (d_1), à l’UniFrac non pondéré (d_UW),
+à la variance ajustée UniFrac (d_VAW), GUniFrac avec alpha = 0, GUniFrac
+avec alpha = 0,5
+
 ``` r
+# On peut donc calculer l'UniFrac non pondéré:
 physeq_rar_du <- unifracs[, , "d_UW"]   
 ```
 
 ``` r
+# On peut également faire de la taxonomie structurelle, par la méthode Bray-Curtis:
 physeq_rar_bray <- vegan::vegdist(physeq_rar@otu_table@.Data, method = "bray")
 tmp <- transform_sample_counts(physeq,function(x) {x/sum(x)} )
 physeq_rar_bray <- phyloseq::distance(tmp, method = "bray")
 ```
 
 ``` r
+# Ou de la phylogénétique structurelle, avec UniFrac pondéré:
 physeq_rar_dw <- unifracs[, , "d_1"]
 ```
 
 ``` r
+# On peut calculer les distances, c'est-à-dire les dissimilarités:
 dist_methods <- unlist(distanceMethodList)
 data.frame(position = seq_along(dist_methods),
            dist_methods)
@@ -379,6 +438,7 @@ data.frame(position = seq_along(dist_methods),
     ## designdist        47          ANY
 
 ``` r
+# On peut sélectionner les distances d'intérêt:
 dist_methods <- dist_methods[c(1, 2, 10, 8)]
 dist_methods
 ```
@@ -387,19 +447,26 @@ dist_methods
     ##  "unifrac" "wunifrac"  "jaccard"     "bray"
 
 ``` r
+# On fait une boucle sur chaque méthode de distance, et une sauvegarde de chaque tracé dans une liste, appelée plist:
 plist <- vector("list")
 
 for(i in dist_methods){
+  # Calcul de la matrice de distance:
   iDist <- phyloseq::distance(physeq_rar, method = i)
+  # Calcul de l'ordination PCoA
   iMDS <- ordinate(physeq_rar, "MDS", distance = iDist)
   p <- NULL
+  # On génère un plot:
   p <- plot_ordination(physeq_rar, iMDS, color= "Geo")
+  # On ajoute un titre à chaque plot:
   p <- p + ggtitle(paste("MDS using distance method ", i, sep=""))
+  # On sauvegarde le graphique dans la liste plist:
   plist[[i]] = p 
 }
 ```
 
 ``` r
+# On peut alors combiner les résultats:
 df <- plyr::ldply(plist, function(x) x$data)
 head(df)
 ```
@@ -437,20 +504,31 @@ ggplot(df, aes(Axis.1, Axis.2, color = Geo)) +
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-31-1.png)<!-- -->
+On examine ensuite la façon dont les échantillons se regroupent sur une
+certaine mesure de similarité ou de dissimilarité. Étant donné que les
+données ici sont de composition, il s’agit de réaliser une
+classification ascendante hiérarchique (HAC) des échantillons, et ce
+basée sur la distance d’Aitchison.
 
 ``` r
+# On calcule la matrice de distance:
 physeq_clr_dist <- phyloseq::distance(physeq_clr, method = "euclidean")
 ```
 
+IL existe quatre critères d’agrégation pour les différents regroupements
+obtenus:
+
 ``` r
+# Critère d'agrégation simple:
 spe_single <- hclust(physeq_clr_dist, method = "single")
 
+# Critère d'agrégation complète:
 spe_complete <- hclust(physeq_clr_dist, method = "complete")
 
-
+# Méthode des groupes de paires non pondérées avec moyenne arithmétique
 spe_upgma <- hclust(physeq_clr_dist, method = "average")
 
-
+# Critère d'affectation:
 spe_ward <- hclust(physeq_clr_dist, method = "ward.D")
 
 par(mfrow = c(2, 2))
@@ -461,8 +539,20 @@ plot(spe_ward, main = "ward")
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-33-1.png)<!-- -->
+Une matrice cophénétique est une matrice représentant les distances
+cophénétiques entre toutes les paires d’objets. Une corrélation r de
+Pearson, appelée corrélation cophénétique dans ce contexte, peut être
+calculée entre la matrice de dissimilarité originale et la matrice
+cophénétique. La méthode avec la corrélation cophénétique la plus élevée
+peut être considérée comme celle qui a produit le meilleur modèle de
+regroupement pour la matrice de distance.
+
+IL s’agit alors de calculer la matrice cophénétique et la corrélation
+des quatre résultats de regroupement présentés ci-dessus, au moyen de la
+fonction cophenetic()
 
 ``` r
+# On réalise la corrélation cophénétique
 spe_single_coph <- cophenetic(spe_single)
 cor(physeq_clr_dist, spe_single_coph)
 ```
@@ -490,11 +580,17 @@ cor(physeq_clr_dist, spe_ward_coph)
 
     ## [1] 0.9044309
 
+Pour illustrer la relation entre une matrice de dissimilarité et un
+ensemble de matrices cophénétiques obtenues à partir de diverses
+méthodes, on peut dessiner des diagrammes de type Shepard en traçant les
+distances originales par rapport aux distances cophénétiques.
+
 ``` r
 plot_coph_cor <- function(cophenetic_distance, hclust_type){
-
+# On calcule d'abord la corrélation entre la distance cophénétique et la distance observée
   cor_res <- round(cor(physeq_clr_dist, cophenetic_distance),3)
 
+# Puis on génère un diagramme de dispersion pour visualiser la relation
   plot(x = physeq_clr_dist,
      y = cophenetic_distance,
      xlab = "Aitchison distance",
@@ -520,8 +616,19 @@ plot_coph_cor(cophenetic_distance = spe_ward_coph,
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-35-1.png)<!-- -->
+D’après les graphiques obtenus, il semble clair que la méthode UPGMA
+(graphique en bas à gauche) donne la représentation la plus fidèle des
+distances originales, étant donné que c’est sur cette représentation que
+les points semblent les “plus alignés” sur la droite.
+
+Pour interpréter et comparer les résultats du clustering, les valeurs de
+niveau de fusion d’un dendrogramme sont les valeurs de dissimilarité où
+une fusion entre deux branches d’un dendrogramme se produit. Le traçage
+des valeurs du niveau de fusion peut aider à définir les niveaux de
+coupe.
 
 ``` r
+# On trace les valeurs du niveau de fusion pour le dendrogramme UPGMA.
 par(mfrow = c(1, 1))
 
 plot(x = spe_upgma$height,
@@ -539,8 +646,11 @@ text(x = spe_upgma$height,
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-36-1.png)<!-- -->
+Ce graphique montre des sauts clairs après chaque fusion entre 2
+groupes.
 
 ``` r
+# On installe le package NbClust, qui permet de déterminer le bon nombre de clusters dans l'ensemble des données:
 install.packages("NbClust", lib = ".")
 library("NbClust", lib.loc = ".")
 nclust <- nb_clust_all(data = t(physeq_clr_asv), seed = 1000)
@@ -588,9 +698,18 @@ nclust <- nb_clust_all(data = t(physeq_clr_asv), seed = 1000)
     ## [1] "Trying sdbw index..."
     ## Based on a number of criteria, we will select 2 clusters.
 
-``` r
-k <- 2 
+L’indice de Hubert et l’indice D sont des méthodes graphiques permettant
+de déterminer le nombre de clusters.
 
+Grâce à l’utilisation de NbClust, deux groupes d’échantillons ont été
+mis en évidence.
+
+``` r
+# On coupe le dendrogramme afin d'obtenir K groupes et pouvoir comparer leur composition
+k <- 2 
+# 2 représente le ombre de groupes donné par le graphique du niveau de fusion
+
+# Puis on coupe le dendogramme
 spe_upgma_clust <- cutree(tree = spe_upgma, k = k)
 table(spe_upgma_clust)
 ```
@@ -604,6 +723,7 @@ spe_upgma_clust2 <- data.frame(UPGMA_clusters = spe_upgma_clust)
 ```
 
 ``` r
+# On trace un dendrogramme avec les étiquettes de groupe
 plot(spe_upgma,
      hang = -1,
      ylab = "Height",
@@ -622,8 +742,17 @@ legend("topright",
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-40-1.png)<!-- -->
+Il existe plusieurs façons de mesurer la robustesse d’un algorithme de
+clustering. Trois mesures couramment utilisées sont l’indice de Dunn,
+l’indice Davis-Bouldin et l’indice Silhoutte. L’indice de Dunn est
+calculé comme un rapport entre la plus petite distance inter-cluster et
+la plus grande distance intra-cluster. Un DI élevé signifie un meilleur
+regroupement puisque les observations dans chaque groupe sont plus
+proches les unes des autres, tandis que les groupes eux-mêmes sont plus
+éloignés les uns des autres.
 
 ``` r
+# On utilise la fonction cluster.stats() présente dans le package fpc afin de calculer l'indice de Dunn, pour la validation du cluster:
 cs <- fpc::cluster.stats(d = physeq_clr_dist,
                          clustering = spe_upgma_clust)
 
@@ -632,10 +761,22 @@ cs$dunn
 
     ## [1] 0.9231545
 
+L’indice de Dunn est élevé, indiquant un bon regroupement
+d’échantillons.
+
+Maintenant qu’ont été identifiés deux groupes d’échantillons en fonction
+de leur composition en communauté microbienne, il est possible
+d’examiner quels clades microbiens (ASV) sont enrichis dans chacun des
+groupes.
+
 ``` r
+# On transforme les comptes normalisés en pourcentage, grâce à la fonction transform_sample_counts():
 pourcentS <- phyloseq::transform_sample_counts(physeq_rar, function(x) x/sum(x) * 100)
+# On sélectionne les 30 meilleurs ASV (taxa):
 mytop30 <- names(sort(phyloseq::taxa_sums(pourcentS), TRUE)[1:30])
+# On extrait les taxa de l'objet pourcentS:
 selection30 <- phyloseq::prune_taxa(mytop30, pourcentS)
+# On affiche l'objet contenant les 30 meilleurs ASV:
 selection30
 ```
 
@@ -647,9 +788,11 @@ selection30
     ## refseq()      DNAStringSet:      [ 30 reference sequences ]
 
 ``` r
+# On récupère l'abondance de l'ASV (otu_table) sous forme de tableau et on la place dans une variable:
 selection30_asv <- phyloseq::otu_table(selection30)
 selection30_sample <- phyloseq::sample_data(selection30)
 
+# On modifie les noms de lignes:
 rownames(selection30_asv)
 ```
 
@@ -663,7 +806,9 @@ sample_new_names <- paste(selection30_sample$SampName,
                           selection30_sample$Description,
                           sep = "_")
 
+# Transformation du Z score (avec scale = échelle):
 heat <- t(base::scale(selection30_asv))
+# On affiche le résultat:
 head(data.frame(heat))
 ```
 
@@ -690,6 +835,7 @@ head(data.frame(heat))
     ## ASV6 -0.1870443  0.10319688  0.7417276  0.2192934  0.5095346  1.322210022
 
 ``` r
+# On affiche le heatmap ("carte de chaleur") du Z score:
 ComplexHeatmap::Heatmap(
   heat,
   row_names_gp = grid::gpar(fontsize = 6),
@@ -704,14 +850,18 @@ ComplexHeatmap::Heatmap(
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-45-1.png)<!-- -->
 
 ``` r
+# On souhaite obtenir un tableau taxonomique:
 taxon <- phyloseq::tax_table(selection30) |>
   as.data.frame()
 
+# On complète les ASV avec les noms d'embranchement et de famille:
 myname <- paste(rownames(taxon), taxon$Phylum, taxon$Family, sep="_")
+# Puis on applique les changements:
 colnames(selection30_asv) <- myname
 ```
 
 ``` r
+# On ré-exécute le Z score pour prendre en compte le changement de noms de colonnes réalisé juste avant:
 heat <- t(scale(selection30_asv))
 
 my_top_annotation <- ComplexHeatmap::anno_block(gp = grid::gpar(fill =c(3,4)),
@@ -734,6 +884,10 @@ ComplexHeatmap::Heatmap(
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-47-1.png)<!-- -->
+On a donc modifié le heatmap qui avait été réalisé précédemment.
+
+Par la suite, on ajoute au sein de cet heatmap un boxplot de la
+distribution d’abondance des ASV dans l’échantillon:
 
 ``` r
 boxplot <- ComplexHeatmap::anno_boxplot(t(selection30_asv), 
@@ -768,10 +922,34 @@ ComplexHeatmap::Heatmap(
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-48-1.png)<!-- -->
+Le graphique obtenu tend à montrer que les communautés microbiennes dans
+les échantillons du sud diffèrent par leur composition microbienne de
+celle de l’échantillon du nord. Cette différence dans la composition de
+la communauté est due à l’abondance différentielle apparente de nombreux
+ASV.
+
+On va donc utiliser la méthode des ordinations (PCA, PCoA, NMDS):
+
+L’analyse des composantes principales (PCA) est une méthode pour
+résumer, dans un espace de faible dimension, la variance dans une
+dispersion multivariée de points. Ce faisant, il donne un aperçu des
+relations linéaires entre les objets et les variables. Cela peut souvent
+servir de bon point de départ dans l’analyse de données multivariées en
+permettant de noter les tendances, les regroupements, les variables clés
+et les valeurs aberrantes potentielles.. Il s’agit de la table ASV
+transformée par CLR qui est utilisée directement et non la matrice de
+distance d’Aitchinson. La fonction calcule alors une distance
+euclidienne sur cette table transformée CLR pour obtenir la matrice
+d’Aitchison. Il existe de nombreux packages permettant l’analyse de la
+PCA.
 
 ``` r
+# On utilise le package PCAtools qui fournit des fonctions pour l'exploration des données via PCA et permet à l'utilisateur de générer des chiffres prêts à être publiés
+# On prépare la table ASV pour ajouter la taxonomie:
 tax_CLR <-  as.data.frame(tax_table(physeq_clr)) 
+# On complète les ASV avec les noms de famille et de genre:
 ASVname <- paste(rownames(tax_CLR), tax_CLR$Family, tax_CLR$Genus,sep="_")
+# Puis on applique le tout:
 rownames(physeq_clr_asv) <- ASVname
 p <- PCAtools::pca(physeq_clr_asv,
                    metadata = data.frame(sample_data(physeq_clr)))
@@ -783,8 +961,14 @@ PCAtools::screeplot(p, axisLabSize = 18, titleLabSize = 22)
     ## Warning: Removed 2 rows containing missing values (`geom_point()`).
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-49-1.png)<!-- -->
+Le graphique montre que le premier PC (composant principal) se démarque
+vraiment avec environ 30 % de la variance expliquée, puis nous avons une
+baisse progressive pour les composants restants. Ce graphique seul
+montre juste la proportion cumulative de la variation expliquée, mais il
+s’agit de déterminer le nombre optimal de PC à conserver.
 
 ``` r
+# On utilise l'analyse parallèle de Horn:
 horn <- PCAtools::parallelPCA(physeq_clr_asv)
 ```
 
@@ -948,6 +1132,7 @@ horn$n
     ## [1] 2
 
 ``` r
+# On utilise la méthode Elbow:
 elbow <- PCAtools::findElbowPoint(p$variance)
 elbow
 ```
@@ -955,7 +1140,14 @@ elbow
     ## PC3 
     ##   3
 
+D’après les résultats obtenus par ces deux méthodes utilisées (Horn et
+Elbow), il faudrait conserver les 2 ou 3 premiers PC. La raison de cette
+divergence est que trouver le bon nombre de PC est une tâche difficile
+et s’apparente à trouver le « bon » nombre de clusters dans un ensemble
+de données.
+
 ``` r
+# On souhaite obtenir graphiquement l'ordination:
 PCAtools::biplot(
   p,
   lab = p$metadata$SampName,
@@ -967,11 +1159,17 @@ PCAtools::biplot(
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-52-1.png)<!-- -->
+Chaque point représente un échantillon: les échantillons qui
+apparaissent plus proches les uns des autres sont généralement plus
+similaires les uns aux autres. En colorant les points (par traitement),
+il est possible de remarquer que le microbiote de l’échantillon du Nord
+est généralement très distinct de l’échantillon du Sud.
 
 ``` r
 PCAtools::biplot(
   p, 
   # loadings parameters
+  # Il est possible de tracer des "chargements" de taxons sur les axes PCA, en utilisant l'argument showLoadings = TRUE
   showLoadings = TRUE,
   lengthLoadingsArrowsFactor = 1.5,
   sizeLoadingsNames = 3,
@@ -986,8 +1184,15 @@ PCAtools::biplot(
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-53-1.png)<!-- -->
+Le graphique montre que plus les ASV se situent vers la droite, plus ils
+ont une contribution élevée au PC1. De même, plus ils se situent vers le
+haut, plus ils ont une contribution au PC2.
+
+L’étape d’après consiste à une exploration plus approfondie des PC, par
+des corrélations avec les données environnementales.
 
 ``` r
+# On va donc corréler les deux premiers PC avec les données environnementales:
 PCAtools::eigencorplot(
   p,
   components = PCAtools::getComponents(p, 1:horn$n),
@@ -1077,8 +1282,22 @@ PCAtools::eigencorplot(
     ## corFUN): Cannot compute exact p-value with ties
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-54-1.png)<!-- -->
+Le graphique obtenu montre uniquement une corrélation significative
+entre le PC1 expliquant la séparation entre les échantillons du Sud et
+du Nord, et la salinité (S).
+
+La seconde méthode d’ordination utilisée est l’analyse des coordonnées
+principales (PCoA, également connue sous le nom de mise à l’échelle
+multidimensionnelle métrique, MDS) qui tente de maximiser la corrélation
+linéaire entre les distances dans la matrice de distance et les
+distances dans un espace de faible dimension (généralement, 2 ou 3 axes
+sont sélectionnés). Comme toujours, le choix de la mesure de similarité
+ou de dissimilarité est essentiel. Lorsque la métrique de distance est
+euclidienne, la PCoA est équivalente à l’analyse des composantes
+principales: l’interprétation des résultats est la même que pour l’APC.
 
 ``` r
+# On utilise la méthode de dissimilarité de Bray-Curtis:
 pcoa_asv <- ape::pcoa(physeq_rar_bray)
 pcoa_coord <- pcoa_asv$vectors[, 1:2]
 
@@ -1125,6 +1344,9 @@ head(hull_data)
     ## #   sample.PT <dbl>, sample.Chla <dbl>, sample.T <dbl>, sample.S <dbl>,
     ## #   sample.Sigma_t <dbl>, color <chr>
 
+Une fois les données préparées, il est possible de tracer le graphique
+de PCoA:
+
 ``` r
 ggplot(data = hull, aes(x = Axis.1, y = Axis.2)) +
   geom_hline(yintercept = 0, colour = "lightgrey", linetype = 2) +
@@ -1152,8 +1374,29 @@ ggplot(data = hull, aes(x = Axis.1, y = Axis.2)) +
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-56-1.png)<!-- -->
+Le graphique montre que l’ordination des échantillons dans le PCoA est
+très similaire à celle observée dans le PCA, avec une séparation claire
+des communautés bactériennes du Nord et du Sud. Ceci peut être dû à
+l’augmentation du gradient de salinité du nord au sud (comme trouvé dans
+les graphiques précédents).
+
+Le PCoA maximise une corrélation linéaire, ce qui “fausse” les formes
+des figures. La mise à l’échelle multidimensionnelle non métrique (NMDS)
+rectifie ce problème en maximisant la corrélation de l’ordre de
+classement.
+
+La troisème méthode d’ordination est donc le NMDS, qui tente de
+représenter la dissimilarité par paires entre les objets dans un espace
+de faible dimension. Tout coefficient de dissimilarité peut être utilisé
+pour construire la matrice de distance utilisée comme entrée. NMDS est
+une approche basée sur le classement. Cela signifie que les données de
+distance d’origine sont substituées par des rangs. Bien que les
+informations sur l’ampleur des distances soient perdues, les méthodes
+basées sur le classement sont généralement plus robustes pour les
+données qui n’ont pas de distribution identifiable.
 
 ``` r
+# Puisque les axes ne sont pas ordonnés dans le NMDS, la fonction vegan::metaMDS() fait automatiquement pivoter le résultat final du NMDS à l'aide du PCA pour que l'axe 1 corresponde à la plus grande variance parmi les points d'échantillonnage du NMDS:
 physeq_clr_nmds <- vegan::metaMDS(physeq_clr_dist, k=2, trymax=100) 
 ```
 
@@ -1208,10 +1451,13 @@ physeq_clr_nmds <- vegan::metaMDS(physeq_clr_dist, k=2, trymax=100)
     ## *** Best solution repeated 13 times
 
 ``` r
+# Un moyen utile d'évaluer la pertinence d'un résultat NMDS est de comparer, dans un diagramme de Shepard, les distances entre les objets du tracé d'ordination avec les distances originales:
 vegan::stressplot(physeq_clr_nmds)
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-58-1.png)<!-- -->
+Le R2 est proche de 1, ce qui confirme que les données peuvent être
+correctement analysées
 
 ``` r
 nmds_coord <- data.frame(physeq_clr_nmds$points)
@@ -1246,7 +1492,7 @@ ggplot(hull,aes(x = Axis.1, y = Axis.2)) +
   geom_polygon(data = hull_data,
                aes(group = sample.Geo,
                    fill = sample.Geo),
-               alpha = 0.3) + # add the convex hulls)
+               alpha = 0.3) + 
   scale_fill_manual(values = c("Darkgrey", "#1919ff")) +
   geom_point(data = hull,
              aes(color = sample.Geo,
@@ -1262,17 +1508,24 @@ ggplot(hull,aes(x = Axis.1, y = Axis.2)) +
   ylab(paste("MDS2")) +
   theme_bw() +
   coord_equal() +
-  theme(axis.title.x = element_text(size=14), # remove x-axis labels
-        axis.title.y = element_text(size=14), # remove y-axis labels
+  theme(axis.title.x = element_text(size=14), # supprimer les étiquettes de l'axe des abscisses
+        axis.title.y = element_text(size=14), # supprimer les étiquettes de l'axe des ordonnées
         panel.background = element_blank(), 
-        panel.grid.major = element_blank(),  #remove major-grid labels
-        panel.grid.minor = element_blank(),  #remove minor-grid labels
+        panel.grid.major = element_blank(),  # supprimer les étiquettes des grilles principales
+        panel.grid.minor = element_blank(),  # supprimer les étiquettes des grilles mineures
         plot.background = element_blank())
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-59-1.png)<!-- -->
+Le graphique obtenu montre le même modèle d’ordre des échantillons que
+dans le PCA et le PCoA. Il n’y a pas de scores d’espèces (comme pour le
+PCoA).
+
+Il s’agit ensuite de corréler les variables environnementales avec les
+axes d’ordination obtenus.
 
 ``` r
+# On fait la corrélation avec les données environnementales:
 data.frame(names(hull))
 ```
 
@@ -1304,7 +1557,7 @@ data.frame(names(hull))
 ``` r
 env <- hull[, 13:23]
 
-# The function envfit will add the environmental variables as vectors to the ordination plot
+# La fonction envfit permet d'ajouter les variables environnementales sous forme de vecteurs au graphique d'ordination:
 ef <- vegan::envfit(physeq_clr_nmds, env, permu = 1000)
 ef
 ```
@@ -1329,14 +1582,37 @@ ef
     ## Permutation: free
     ## Number of permutations: 1000
 
+On obtient le R2, c’est-à-dire le coefficient de corrélation, ainsi que
+la valeur p associée.
+
 ``` r
 plot(physeq_clr_nmds, type = "t", display = "sites")
 plot(ef, p.max = 0.05)
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-62-1.png)<!-- -->
+A l’aide de ce graphique, on remarque que de nouvelles variables
+environnementales liées aux conditions trophiques de l’habitat (NH4 et
+PT) ont été corrélées avec le deuxième axe du NMDS. La détection de ces
+nouvelles relations entre les communautés microbiennes et
+l’environnement peut être liée au fait que le NMDS est le mieux adapté
+pour détecter la réponse non linéaire des microbes aux gradients
+environnementaux.
+
+Après cela, on peut réaliser des tests d’hypothèses, afin de voir si les
+échantillons se regroupent au-delà de ce qui est attendu.
+
+PERMANOVA en fait partie, c’est l’une des méthodes non paramétriques les
+plus utilisées pour ajuster des modèles multivariés aux données du
+microbiome. Il s’agit d’une analyse de variance multivariée basée sur
+les matrices de distance et la permutation. Pour ce faire, elle
+partitionne les sommes des carrés pour les composantes intra et
+inter-cluster en utilisant le concept des centroïdes. De nombreuses
+permutations des données (c’est-à-dire un brassage aléatoire) sont
+utilisées pour générer la distribution nulle.
 
 ``` r
+# Utilisation de la méthode PERMANOVA:
 metadata <- data.frame(sample_data(physeq_clr))
 results_permanova <- vegan::adonis2(physeq_clr_dist ~ Geo,
                                     data = metadata,
@@ -1357,7 +1633,14 @@ results_permanova
     ## ---
     ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 
+Grâce à ces résultats, nous pouvons voir que le groupe Nord/Sud explique
+de manière significative (p \< 0,001) 20 % de la variance dans la
+matrice Aitchison de l’ASV, ce qui confirme le fait que les bactéries du
+Nord et du Sud diffèrent considérablement dans leur composition
+bactérienne.
+
 ``` r
+# On teste l'hypothèse d'une répartition multivariée similaire entre les groupes (analogue à l'homogénéité de la variance):
 anova(vegan::betadisper(physeq_clr_dist, metadata$Geo))
 ```
 
@@ -1370,7 +1653,10 @@ anova(vegan::betadisper(physeq_clr_dist, metadata$Geo))
     ## ---
     ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 
+Avec ces résultats, les groupes ont des écarts très différents.
+
 ``` r
+# On utilise la fonction adonis() afin de vérifier quels taxons contribuent le plus aux différences des communautés:
 permanova <- vegan::adonis(t(physeq_clr_asv) ~ Geo,
                             data = metadata,
                             permutations = 1000,
@@ -1396,6 +1682,7 @@ barplot(sort(top.coef),
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-65-1.png)<!-- -->
 
 ``` r
+# On utilise PERMANOVA sur des variables continues:
 permanova_S <- vegan::adonis2(physeq_clr_dist ~ S,
                               data = metadata,
                               perm = 1000)
@@ -1455,7 +1742,12 @@ permanova_PT
     ## ---
     ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 
+Le résultat confirme que la salinité et, dans une moindre mesure, le NH4
+et le PT sont des facteurs importants qui façonnent les communautés
+microbiennes.
+
 ``` r
+# On fait de même pour les autres variables:
 permanova_all <- vegan::adonis2(physeq_clr_dist ~ SiOH4 + NO2 + NO3 + NH4 + PO4 + NT + PT + Chla + T + S + Sigma_t,
                                 by="margin",
                                 data=metadata,
@@ -1486,6 +1778,7 @@ permanova_all
     ## Total    17   5585.6 1.00000
 
 ``` r
+# On calcule la matrice de corrélation:
 cor_metadadata <- cor(metadata[, 11:21], method = "spearman")
 
 cor_mtest <- function(mat, ...) {
@@ -1503,6 +1796,7 @@ cor_mtest <- function(mat, ...) {
   p_mat
 }
 
+# On fait la matrice de la valeur p de la corrélation:
 p_mat <- cor_mtest(metadata[, 11:21])
 ```
 
@@ -1681,6 +1975,8 @@ corrplot::corrplot(cor_metadadata,
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-70-1.png)<!-- -->
+Le graphique montre que de nombreuses variables sont corrélées. S est
+proche de PO4, Sigma-t, NH4 et NO2. NO3 est substitut de SiOH4.
 
 ``` r
 permanova_cor_pars <- vegan::adonis2(physeq_clr_dist ~ S + NO3 + NT + Chla + T,
@@ -1707,7 +2003,16 @@ permanova_cor_pars
     ## ---
     ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 
+Ensuite, on peut utiliser des tests ANOSIM pour une différence
+significative entre deux ou plusieurs classes d’objets sur la base de
+toute mesure de similarité ou de dissimilarité. Cette technique compare
+les rangs des distances entre les objets de différentes classes avec les
+rangs des distances des objets au sein des classes. La base de cette
+approche est similaire à la technique d’ordination NMDS décrite
+auparavant.
+
 ``` r
+# On réalise le test ANOSIM:
 vegan::anosim(physeq_clr_dist, metadata$Geo, permutations = 1000)
 ```
 
@@ -1722,7 +2027,17 @@ vegan::anosim(physeq_clr_dist, metadata$Geo, permutations = 1000)
     ## Permutation: free
     ## Number of permutations: 1000
 
+Après, on peut utiliser des analyses directes de gradient (aussi
+appelées ordinations canoniques), qui associent deux ensembles de
+données ou plus dans le processus d’ordination lui-même. Par conséquent,
+si l’on souhaite extraire des structures d’un ensemble de données qui
+sont liées à des structures d’autres ensembles de données, et/ou tester
+formellement des hypothèses statistiques sur la signification de ces
+relations, l’ordination canonique est la méthode à utiliser. Ici, il
+s’agit d’effectuer une analyse redondante (RDA):
+
 ``` r
+# RDA est une méthode combinant la régression et l'analyse des composantes principales (PCA). RDA calcule les axes qui sont des combinaisons linéaires des variables explicatives. Avec RDA, les axes modélisent la variation de la matrice dépendante.
 spe_rda <- vegan::rda(t(physeq_clr_asv) ~ .,
                       metadata[, 11:21])
 head(summary(spe_rda))  # Scaling 2 (default)
@@ -1830,6 +2145,19 @@ head(summary(spe_rda))  # Scaling 2 (default)
     ## S       -0.93622  0.00815 -0.06712  0.05543  0.04078  0.183950
     ## Sigma_t -0.52380 -0.20293 -0.31121 -0.40702  0.43162  0.205711
 
+D’après les résultats obtenus, les variables environnementales incluses
+expliquent 70,44 % de la variation de la composition de la communauté
+bactérienne entre les sites (voir Proportion dans Constrained). 29,56 %
+de la variance est inexpliquée (voir Proportion dans Unconstrained).
+Cependant, la proposition de variance expliquée est beaucoup plus
+faible. Le R2 du résumé mesure la force de la relation canonique entre
+les variables de réponse (matrice Y, ASV) et les variables explicatives
+(matrice X) en calculant la proportion de la variation de Y expliquée
+par les variables de X. Cependant, ce R2 est biaisé. Nous calculons un
+R2 ajusté, qui mesure également la force de la relation entre Y et X,
+mais applique une correction du R2 pour tenir compte du nombre de
+variables explicatives:
+
 ``` r
 R2 <- vegan::RsquareAdj(spe_rda)$r.squared
 R2
@@ -1844,7 +2172,27 @@ R2adj
 
     ## [1] 0.1625961
 
+En réalité, la proportion de variance expliquée est tombée à 16,25 %. La
+sortie numérique montre que les deux premiers axes canoniques expliquent
+ensemble 35,1 % de la variance totale des données (voir Cumulative
+Proportion dans RDA2), le premier axe à lui seul expliquant 25,9 % (voir
+Proportion Explained dans RDA1). Ce sont cependant des valeurs non
+ajustées. Étant donné que R2 adj = 16,2 %, les pourcentages
+d’autovaleurs adg contraintes cumulées montrent que le premier axe à lui
+seul explique la variance de 0,162 \* 0,368 = 0,059 ou 5,9 % (O,162
+provient du R2 adj, 0,368 provient de la Proportion Explained de RDA1
+adj). Étant donné que les données écologiques sont généralement assez
+bruyantes, il ne faut jamais s’attendre à obtenir une valeur très élevée
+de R2. De plus, la première valeur propre non contrainte (PC1) est
+relativement élevée, ce qui signifie qu’elle affiche une structure
+résiduelle importante des données de réponse qui n’est pas expliquée par
+les paramètres environnementaux mesurés ici.
+
+Pour compléter cela, l’interprétation de l’ordination contrainte doit
+être précédée d’un test de signification statistique:
+
 ``` r
+# On fait un test global du résultat du RDA:
 anova(spe_rda, step = 1000)
 ```
 
@@ -1860,6 +2208,7 @@ anova(spe_rda, step = 1000)
     ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 
 ``` r
+# On fait un test de tous les axes canoniques
 anova(spe_rda, by = "axis", step = 1000)
 ```
 
@@ -1883,7 +2232,22 @@ anova(spe_rda, by = "axis", step = 1000)
     ## RDA11     1    7.012 0.4333  0.911
     ## Residual  6   97.109
 
+D’après les résultats, le modèle complet n’est pas statistiquement
+significatif (car p = 0,09), et chaque axe canonique résultant de la RDA
+n’est pas statistiquement significatif (puisque p \> 0,05). De ce fait,
+le modèle RDA n’est pas interprétable.
+
+Si l’on veut sélcetionner le nombre de variables explicatives: Une
+approche simple pour identifier la colinéarité entre les variables
+explicatives est l’utilisation des facteurs d’inflation par variance
+(VIF). Plus la valeur est élevée, plus la colinéarité est élevée. VIF
+mesure la proportion par laquelle la variance d’un coefficient de
+régression est gonflée en présence d’autres variables explicatives. Les
+VIF supérieurs à 20 indiquent une forte colinéarité. Idéalement, les VIF
+supérieurs à 10 devraient au moins être examinés et évités si possible.
+
 ``` r
+# On réalise les facteurs d'inflation de la variance (VIF):
 vegan::vif.cca(spe_rda)
 ```
 
@@ -1892,7 +2256,20 @@ vegan::vif.cca(spe_rda)
     ##          PT        Chla           T           S     Sigma_t 
     ##    6.835572    2.264012 5417.455601 8388.550079 6878.896122
 
+On remarque d’après les résultats que salinité, température et Sigma_t
+ont des VIF très élevés, ce qui confirme les colinéarités observées plus
+tôt entre les variables explicatives (voir PERMANOVA). Une réduction du
+nombre de variables explicatives est donc justifiée. Afin de simplifier
+ce modèle, il est possible d’effectuer une sélection vers l’avant (ou
+vers l’arrière ou par étapes). Ces types de sélections aident à
+sélectionner des variables statistiquement importantes. Cependant, il
+est important de noter que la sélection des variables écologiquement est
+beaucoup plus importante que d’effectuer la sélection de cette manière.
+Si une variable d’intérêt écologique n’est pas sélectionnée, cela ne
+signifie pas qu’elle doit être supprimée de la RDA.
+
 ``` r
+# On réalise une sélection avancée sur les 11 variables environnementales, grâce à la fonction ordiR2step():
 step_forward <- vegan::ordiR2step(vegan::rda(t(physeq_clr_asv) ~ 1,
                                              data = metadata[, 11:21]),
                                   scope = formula(spe_rda),
@@ -1918,7 +2295,13 @@ step_forward <- vegan::ordiR2step(vegan::rda(t(physeq_clr_asv) ~ 1,
     ## <none>           0.00000000
     ## + NT            -0.01448677
 
+De ces résultats, la sélection vers l’avant montre qu’un modèle avec
+seulement la salinité a un ajustement R2 plus élevé qu’avec toutes les
+variables et explique 18,36 % de la variance. Calculons cette RDA la
+plus parcimonieuse et vérifions sa signification.
+
 ``` r
+# On calcule la RDA la plus utile:
 spe_rda_pars <- vegan::rda(t(physeq_clr_asv) ~ S, data = metadata[, 11:21])
 anova(spe_rda_pars, step = 1000)
 ```
@@ -1953,6 +2336,7 @@ anova(spe_rda_pars, step = 1000, by = "axis")
 ``` r
 R2adj_pars <- vegan::RsquareAdj(spe_rda_pars)$adj.r.squared
 
+# On compare les facteurs d'inflation de la variance (VIF):
 vegan::vif.cca(spe_rda)
 ```
 
@@ -1968,7 +2352,12 @@ vegan::vif.cca(spe_rda_pars)
     ## S 
     ## 1
 
+Maintenant, le modèle et le premier axe canonique résultant de la RDA
+sont statistiquement significatifs (puisque p \< 0,05). Le VIF de la
+salinité (S) n’est que de 1, donc le modèle RDA est interprétable.
+
 ``` r
+# On représente graphiquement le modèle, en préparant les données dans un premier temps:
 ii <- summary(spe_rda_pars)
 
 sp <- as.data.frame(ii$species[, 1:2]) * 2
@@ -2023,21 +2412,49 @@ ggplot() +
     ## generated.
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-84-1.png)<!-- -->
+À partir de ce graphique, il est évident que la salinité est le
+principal facteur environnemental mesuré pour façonner les communautés
+bactériennes. Parmi tous les ASV, certains sont plus liés à ce gradient
+de salinité. C’est le cas de l’ASV 11 et 12 pour lesquels l’abondance
+augmente lorsque la salinité diminue et de l’ASV 7 qui présente le
+schéma opposé.
+
+Pour continuer dans les analyses, une combinaison de corrélation de
+Mantel et de régression multiple sur les matrices de distance permet une
+analyse de type régression de deux ou plusieurs matrices de similarité
+ou de dissimilarité, en utilisant des permutations pour déterminer la
+signification des coefficients de détermination. Une matrice doit
+contenir des similarités ou des dissimilarités calculées à partir des
+données de réponse, telles que les abondances OTU, et les autres
+matrices doivent contenir des similarités ou des dissimilarités
+calculées à partir de données explicatives (les paramètres
+environnementaux, par exemple).
 
 ``` r
-#install.packages("SpatialEpi")
-#library(SpatialEpi)
+# install.packages("SpatialEpi")
+# library(SpatialEpi)
+# Ce package permet de calculer la distance de matrice spatiale, à savoir la distance kilométrique entre les points géographiques à partir des coordonnées géographiques:
+# ANFcoord <- read.table("Location_coordinates.txt", sep = "\t", row.names = 1, header = T)
+# ANF_km <- latlong2grid(ANFcoord[,1:2])
+# rownames(ANF_km) <- rownames(ANFcoord)
 ANF_km <- readRDS(here::here("course-material-main","data","beta_diversity","spatial_distance.rds"))
 ANF_km_dist <- dist(ANF_km)
 ```
 
+Ensuite, la relation entre la similitude microbienne par paires et la
+distance spatiale est évaluée en ajustant la fonction exponentielle
+négative décrivant la désintégration de la similitude microbienne avec
+la distance spatiale.
+
 ``` r
+# On calcule et on ajoute le modèle au graphique:
 ANF_decay_exp <- betapart::decay.model(physeq_clr_dist/100,
                                        ANF_km_dist,
                                        y.type="dissim",
                                        model.type="exp",
                                        perm=100)
 
+# Graphique des relations de décroissance de la distance:
 plot(ANF_km_dist, physeq_clr_dist/100,
      ylim=c(0, max(physeq_clr_dist/100)),
      xlim=c(0, max(ANF_km_dist)),
@@ -2056,17 +2473,21 @@ legend("bottomright",
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-86-1.png)<!-- -->
 
 ``` r
+# On fait la répartition de la variance:
 physeq_clr_dist_square <- phyloseq::distance(physeq_clr,
                                              method = "euclidean",
                                              diag = TRUE,
                                              upper = TRUE)
 
+# On fait la matrice spatiale:
 ANF_km_dist_square <- dist(ANF_km, diag = TRUE, upper = TRUE)
 
+# On fait la matrice environnementale:
 envdata <- dist(metadata[,11:21], diag = TRUE, upper = TRUE)
 ```
 
 ``` r
+# On fait la régression multiple sur les matrices (MRM)
 ecodist::MRM(physeq_clr_dist_square ~ envdata + ANF_km_dist_square, nperm=1000)
 ```
 
@@ -2132,7 +2553,32 @@ modEvA::varPart(A = 0.212, B = 0.238, AB = 0.366,
     ## Environmental_Dispersal limitation      0.084
     ## Unexplained                             0.634
 
+En utilisant la régression multiple sur les matrices de distance (MRM),
+les variables spatiales et environnementales se sont avérées des
+prédicteurs significatifs de la diversité bêta et ont expliqué ensemble
+36,7 % de la variation de la dissimilarité des communautés microbiennes
+(voir R2 du premier ecodist). Le partitionnement de la variance a
+ensuite été utilisé pour diviser la variation en composants
+environnementaux purement spatiaux, purement environnementaux et
+structurés dans l’espace. Avec 15,4 % (voir Dispersal Limitation dans le
+tableau), la quantité de variation de la dissimilarité expliquée par la
+composante purement spatiale était plus élevée que la variation
+expliquée par la composante environnementale, ce qui indique que la
+dispersion est un processus important qui façonne nos communautés.
+
+Par la suite, on souhaite réaliser une analyse de l’abondance
+différentielle (DAA, afin d’identifier des taxons spécifiques associés à
+des variables de métadonnées d’intérêt), en utilisant dans un premier
+temps LEFse (Analyse discriminante linéaire Taille de l’effet). LEFse
+permet de détecter des caractéristiques avec une abondance
+différentielle significative par rapport à la classe d’intérêt ; la
+cohérence biologique est ensuite étudiée à l’aide d’un ensemble de tests
+par paires entre sous-classes à l’aide du test de rang (non apparié) de
+Wilcoxon. Enfin, LEfSe utilise LDA pour estimer la taille de l’effet de
+chaque caractéristique différentiellement abondante.
+
 ``` r
+# On applique LEFse:
 mm_lefse <- microbiomeMarker::run_lefse(physeq, norm = "CPM",
                                         wilcoxon_cutoff = 0.01,
                                         group = "Geo",
@@ -2285,6 +2731,7 @@ mm_lefse_table
     ## marker12   ASV27        South 4.333577 0.0008112059 0.0008112059
 
 ``` r
+# On réalise le graphique:
 p_LDAsc <- microbiomeMarker::plot_ef_bar(mm_lefse)
 y_labs <- ggplot_build(p_LDAsc)$layout$panel_params[[1]]$y$get_labels()
 p_abd <- microbiomeMarker::plot_abundance(mm_lefse, group = "Geo") +
@@ -2299,8 +2746,26 @@ gridExtra::grid.arrange(p_LDAsc, p_abd, nrow = 1)
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-93-1.png)<!-- -->
+D’après le graphique obtenu, la méthode LEFse a permis d’identifier 12
+biomarqueurs, dont les ASV 7, 11 et 12, déjà identifiés précédemment
+avec d’autres méthodes.
+
+Pour continuer, on réalise une analyse différentielle des compositions
+des microbiomes avec correction de biais (ANCOM-BC), qui suppose que
+l’échantillon observé est une fraction inconnue d’un volume unitaire de
+l’écosystème, et que la fraction d’échantillonnage varie d’un
+échantillon à l’autre. ANCOM-BC tient compte de la fraction
+d’échantillonnage en introduisant un terme de décalage spécifique à
+l’échantillon dans un cadre de régression linéaire, qui est estimé à
+partir des données observées. Le terme de décalage sert de correction de
+biais, et le cadre de régression linéaire à l’échelle log logique est
+analogue à la transformation du rapport log-ratio pour traiter de la
+compositionnalité des données du microbiome. De plus, cette méthode
+fournit des valeurs p et des intervalles de confiance pour chaque taxon.
+Il contrôle également le FDR.
 
 ``` r
+# On utilise l'analyse ANCOM-BC:
 mm_ancombc <- run_ancombc_patched(
   physeq,
   group = "Geo",
@@ -2466,6 +2931,7 @@ mm_ancombc_table
     ## marker10   ASV49        North -4.680720 2.858686e-06 7.504051e-05
 
 ``` r
+# On réalise le graphique:
 an_ef <- microbiomeMarker::plot_ef_bar(mm_ancombc)
 y_labs <- ggplot_build(an_ef)$layout$panel_params[[1]]$y$get_labels()
 an_abd <- microbiomeMarker::plot_abundance(mm_ancombc, group = "Geo") +
@@ -2480,6 +2946,18 @@ gridExtra::grid.arrange(an_ef, an_abd, nrow = 1)
 ```
 
 ![](tutoriel-beta_diversite_files/figure-gfm/unnamed-chunk-95-1.png)<!-- -->
+Les résultats de l’analyse ANCOM-BC ont permis d’identifier 10
+biomarqueurs, qui sont les mêmes que pour l’analyse LEFse.
+
+Pour finir, il s’agit de réaliser une expression différentielle de type
+ANOVA (en utilisant ALDEx2), qui vise à estimer la variation technique
+au sein de chaque échantillon par taxon en utilisant la distribution de
+Dirichlet. Ceci applique la transformation du rapport log-log (ou des
+transformations du rapport log-ratio étroitement liés). Selon la
+configuration expérimentale, il effectuera un test T de Welch et un test
+de Wilcoxon à deux échantillons ou un test ANOVA et Kruskal-Wallis à
+sens unique. La procédure Benjamini-Hochberg est appliquée dans tous les
+cas pour corriger les tests multiples.
 
 ``` r
 mm_aldex <- microbiomeMarker::run_aldex(physeq, group = "Geo",
@@ -2718,3 +3196,11 @@ mm_aldex_table
 
     ##         feature enrich_group ef_aldex       pvalue       padj
     ## marker1   ASV27        North 2.095543 0.0003582814 0.03277281
+
+Les résultats de l’analyse montre qu’ALDEx2 n’a permis d’identifier
+qu’un seul biomarqueur, ASV 27, qui a été identifié par les deux autres
+méthodes DAA utilisées précédemment. Les autres n’atteignent pas la
+limite FDR utilisée ici. Souvent, si l’on envisage d’effectuer des tests
+DAA, il faut éxécuter plusieurs modèles, en se concentrant sur
+l’intersection des OTU donnée par au moins deux méthodes. Ici, ce serait
+idéalement les 10 ASV identifiés à l’ANCOM-BC.
